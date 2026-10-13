@@ -1,18 +1,20 @@
-// Three hero options: original weave, orbital ribbon, and atom trails.
+// Two hero options: original weave and the combined atom orbital.
 // Choose once per page entry. Resizing, hovering, and clicking keep that choice.
 const stage = document.getElementById('hero-animation');
 const canvas = stage?.querySelector('canvas');
 const context = canvas?.getContext('2d', { alpha: true });
 
 if (stage && canvas && context) {
-  const animations = ['weave', 'orbital', 'atom'];
-  const animation = animations[Math.floor(Math.random() * animations.length)];
+  const animations = ['weave', 'atom-orbital'];
+  // `?hero=weave|atom-orbital` pins one option for previewing.
+  const requested = new URLSearchParams(location.search).get('hero');
+  const preview = ['orbital', 'atom'].includes(requested) ? 'atom-orbital' : requested;
+  const animation = animations.includes(preview) ? preview : animations[Math.floor(Math.random() * animations.length)];
   const scene = { ctx: context, seed: Math.random(), width: 0, height: 0 };
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   stage.dataset.animation = animation;
   let ink = '#787b78';
   let red = '#b23b3d';
-  let paper = '#f3f0e9';
   let elapsed = 1.7;
   let visible = false;
   let frame = 0;
@@ -20,6 +22,7 @@ if (stage && canvas && context) {
   let lastPaint = 0;
   const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
   const sphereOffset = { x: 0, y: 0 };
+  const ringOffset = { x: 0, y: 0 };
 
   function trackPointer(event) {
     if (event.pointerType === 'touch' || motionPreference.matches) return;
@@ -36,18 +39,22 @@ if (stage && canvas && context) {
   function releasePointer() { pointer.target = 0; }
 
   function easePointer(dt) {
-    const follow = 1 - Math.exp(-dt * (animation === 'atom' ? 16 : 7));
+    const follow = 1 - Math.exp(-dt * 7);
     pointer.x += (pointer.targetX - pointer.x) * follow;
     pointer.y += (pointer.targetY - pointer.y) * follow;
     const strengthRate = animation === 'weave' ? (pointer.target ? 4 : 2.5) : (pointer.target ? 8 : 3);
     pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * strengthRate));
-    // A strong pull toward the cursor, with a slower gravitational response.
-    // The renderer keeps the complete sphere within the canvas.
-    const dx = (pointer.x - scene.width * 0.5) * 0.92;
-    const dy = (pointer.y - scene.height * 0.5) * 0.92;
+    // A gentle pull toward the cursor, with a slower gravitational response.
+    // The renderer keeps the sphere inside its ribbon and both within the canvas.
+    const dx = (pointer.x - scene.width * 0.5) * 0.35;
+    const dy = (pointer.y - scene.height * 0.5) * 0.35;
     const gravity = 1 - Math.exp(-dt * 2.7);
     sphereOffset.x += (dx * pointer.strength - sphereOffset.x) * gravity;
     sphereOffset.y += (dy * pointer.strength - sphereOffset.y) * gravity;
+    // The ribbon is the sphere's orbit, so it follows a beat behind.
+    const drag = 1 - Math.exp(-dt * 1.6);
+    ringOffset.x += (sphereOffset.x - ringOffset.x) * drag;
+    ringOffset.y += (sphereOffset.y - ringOffset.y) * drag;
   }
 
   function path(ctx,points,colour,alpha=.5,weight=1.6) {
@@ -113,7 +120,7 @@ if (stage && canvas && context) {
     context.globalAlpha = 1;
   }
 
-  function orbital(view,t,w,h,grey,red,paper) {
+  function atomOrbital(view,t,w,h,grey,red) {
     const yaw=.38+t*.105,tilt=.83;
     const loops=Array.from({length:29},(_,i)=>{
       const lane=i/28*2-1;
@@ -128,68 +135,58 @@ if (stage && canvas && context) {
     });
     let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
     for(const loop of loops)for(const [x,y]of loop){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
-    const scale=Math.min(w*.86/(maxX-minX),h*.82/(maxY-minY)),centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;
+    // While hovered the system contracts slightly, giving it room to travel.
+    const s=pointer.strength,contract=1-.08*s*s*(3-2*s);
+    const scale=Math.min(w*.86/(maxX-minX),h*.82/(maxY-minY))*contract,centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;
+    const clamp=(value,low,high)=>low>high?(low+high)/2:Math.max(low,Math.min(high,value));
+    const halfW=(maxX-minX)/2*scale,halfH=(maxY-minY)/2*scale;
+    const ringX=clamp(w*.5+ringOffset.x,halfW+6,w-halfW-6),ringY=clamp(h*.5+ringOffset.y,halfH+6,h-halfH-6);
     function ringHalf(front) {strands(29,view.seed,(i,highlight)=>{
-      const points=loops[i].map(([x,y,z])=>(z<0)===front?[w*.5+(x-centerX)*scale,h*.5+(y-centerY)*scale]:null);
+      const points=loops[i].map(([x,y,z])=>(z<0)===front?[ringX+(x-centerX)*scale,ringY+(y-centerY)*scale]:null);
       path(view.ctx,points,highlight?red:grey,highlight?.95:.43,highlight?2.3:1.55);
     });}
     ringHalf(false);
-    const ctx=view.ctx,radius=scale*.46;
-    const cx=Math.max(radius+10,Math.min(w-radius-10,w*.5-centerX*scale+sphereOffset.x));
-    const cy=Math.max(radius+10,Math.min(h-radius-10,h*.5-centerY*scale+sphereOffset.y));
-    ctx.fillStyle=paper;ctx.beginPath();ctx.arc(cx,cy,radius,0,Math.PI*2);ctx.fill();
-    function globe(lat,lon){const x=Math.cos(lat)*Math.sin(lon),y=Math.sin(lat),z=Math.cos(lat)*Math.cos(lon),py=y*Math.cos(.3)-z*Math.sin(.3),pz=y*Math.sin(.3)+z*Math.cos(.3);return pz>=0?[cx+radius*x,cy+radius*py]:null;}
-    for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe(i*.24,u*Math.PI*2),160),grey,.30,1.1);
-    for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe((u-.5)*Math.PI,i*.26),120),grey,.26,1.1);
-    path(ctx,sample(u=>[cx+radius*Math.cos(u*Math.PI*2),cy+radius*Math.sin(u*Math.PI*2)]),grey,.55,1.3);
+    // The sphere leads toward the cursor but never leaves its ribbon.
+    const radius=scale*.46,leash=scale*.22;
+    const orbitX=ringX-centerX*scale,orbitY=ringY-centerY*scale;
+    let leadX=w*.5-centerX*scale+sphereOffset.x-orbitX,leadY=h*.5-centerY*scale+sphereOffset.y-orbitY;
+    const lead=Math.hypot(leadX,leadY);
+    if(lead>leash){leadX*=leash/lead;leadY*=leash/lead;}
+    const cx=clamp(orbitX+leadX,radius+6,w-radius-6),cy=clamp(orbitY+leadY,radius+6,h-radius-6);
+    // Racing atom trails replace the wireframe globe. The outer ribbon owns
+    // the single red strand; the central atom uses grey trails only.
+    atomTrails(view,t,cx,cy,radius,grey);
     ringHalf(true);
   }
-  function atom(view,t,w,h,grey,red) {
-    const radius=Math.min(w*.37,h*.40),count=19,redIndex=Math.floor(view.seed*count),segments=[];
+  function atomTrails(view,t,cx,cy,radius,grey) {
+    const segments=[];
     const yaw=.3+t*.07,tilt=.32;
+    const cosYaw=Math.cos(yaw),sinYaw=Math.sin(yaw),cosTilt=Math.cos(tilt),sinTilt=Math.sin(tilt);
     function project(x,y,z) {
-      const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);
-      const ry=y*Math.cos(tilt)-rz*Math.sin(tilt),depth=y*Math.sin(tilt)+rz*Math.cos(tilt),perspective=1/(1+depth*.12);
-      return [w*.5+rx*radius*perspective,h*.5+ry*radius*perspective,depth];
+      const rx=x*cosYaw+z*sinYaw,rz=-x*sinYaw+z*cosYaw;
+      const ry=y*cosTilt-rz*sinTilt,depth=y*sinTilt+rz*cosTilt,perspective=1/(1+depth*.12);
+      return [cx+rx*radius*perspective,cy+ry*radius*perspective,depth];
     }
-    for(let i=0;i<count;i++) {
-      const highlight=i===redIndex;
+    for(let i=0;i<19;i++) {
       const azimuth=i*2.399963+view.seed*6.28,inclination=.38+((i*.618034+view.seed)%1)*1.16;
       const a=[Math.cos(azimuth),Math.sin(azimuth),0];
       const b=[-Math.sin(azimuth)*Math.cos(inclination),Math.cos(azimuth)*Math.cos(inclination),Math.sin(inclination)];
-      const speed=(i%2?-1:1)*(.95+(i%5)*.16),head=t*speed+i*1.83+view.seed*6.28;
-      const length=highlight?3.15:2.15+(i%3)*.24;
-      const orbitPoint = theta => project(a[0]*Math.cos(theta)+b[0]*Math.sin(theta),a[1]*Math.cos(theta)+b[1]*Math.sin(theta),b[2]*Math.sin(theta));
-      // Align the whole ellipse through the actual cursor. The independent
-      // orbital planes and racing phases remain intact, instead of pinching
-      // one faint portion of each trail toward a lagging mouse position.
-      let anchorTheta=0,nearest=Infinity;
-      for(let j=0;j<80;j++) {
-        const theta=j/80*Math.PI*2,point=orbitPoint(theta);
-        const distance=Math.hypot(point[0]-pointer.targetX,point[1]-pointer.targetY);
-        if(distance<nearest){nearest=distance;anchorTheta=theta;}
-      }
-      const anchor=orbitPoint(anchorTheta);
-      const shiftX=(pointer.targetX-anchor[0])*pointer.strength,shiftY=(pointer.targetY-anchor[1])*pointer.strength;
-      const shifted=theta=>{const p=orbitPoint(theta);return [p[0]+shiftX,p[1]+shiftY,p[2]];};
-      if(pointer.strength>0.005) {
-        path(view.ctx,sample(u=>shifted(anchorTheta+u*Math.PI*2),160),highlight?red:grey,pointer.strength*(highlight?.42:.32),highlight?1.8:1.4);
-      }
-      const points=sample(u=>shifted(head-length*(1-u)),80);
+      const speed=(i%2?-1:1)*(.95+(i%5)*.16),head=t*speed+i*1.83+view.seed*6.28,length=2.15+(i%3)*.24;
+      const points=sample(u=>{const theta=head-length*(1-u),c=Math.cos(theta),sn=Math.sin(theta);return project(a[0]*c+b[0]*sn,a[1]*c+b[1]*sn,b[2]*sn);},80);
       for(let j=0;j<points.length-1;j+=8) {
         const end=Math.min(j+8,points.length-1),progress=end/(points.length-1),depth=(points[j][2]+points[end][2])/2;
-        segments.push({points:points.slice(j,end+1),depth,highlight,alpha:(highlight?.94:.64)*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:highlight?2.45:1.55+.35*progress});
+        segments.push({points:points.slice(j,end+1),depth,alpha:.7*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:1.1+.25*progress});
       }
     }
     segments.sort((a,b)=>b.depth-a.depth);
-    for(const segment of segments)path(view.ctx,segment.points,segment.highlight?red:grey,segment.alpha,segment.weight);
+    for(const segment of segments)path(view.ctx,segment.points,grey,segment.alpha,segment.weight);
   }
 
   function draw() {
     if (!scene.width || !scene.height) return;
     context.clearRect(0, 0, scene.width, scene.height);
-    const renderer = { weave, orbital, atom }[animation];
-    renderer(scene, elapsed, scene.width, scene.height, ink, red, paper);
+    const renderer = animation === 'weave' ? weave : atomOrbital;
+    renderer(scene, elapsed, scene.width, scene.height, ink, red);
   }
 
   function pause() {
@@ -221,6 +218,8 @@ if (stage && canvas && context) {
       pointer.strength = 0;
       sphereOffset.x = 0;
       sphereOffset.y = 0;
+      ringOffset.x = 0;
+      ringOffset.y = 0;
     }
     if (visible && !document.hidden && !motionPreference.matches) {
       frame = requestAnimationFrame(tick);
@@ -240,7 +239,6 @@ if (stage && canvas && context) {
     const styles = getComputedStyle(stage);
     ink = styles.getPropertyValue('--flow-ink').trim() || '#787b78';
     red = styles.getPropertyValue('--flow-red').trim() || '#b23b3d';
-    paper = styles.getPropertyValue('--paper').trim() || '#f3f0e9';
     draw();
   }
 
