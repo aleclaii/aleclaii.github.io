@@ -19,6 +19,8 @@ if (stage && canvas && context) {
   let visible = false;
   let frame = 0;
   let lastTick = 0;
+  let scrolling = false;
+  let scrollTimer = 0;
   const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
   const sphereOffset = { x: 0, y: 0 };
   const ringOffset = { x: 0, y: 0 };
@@ -301,9 +303,25 @@ if (stage && canvas && context) {
     lastTick = 0;
   }
 
+  function finishScrolling() {
+    scrollTimer = 0;
+    scrolling = false;
+    resume();
+  }
+
+  function prioritizeScrolling() {
+    // Keep the already-rendered frame available for compositor scrolling.
+    // No geometry or canvas work competes with wheel, touch, or inertia.
+    scrolling = true;
+    releasePointer();
+    pause();
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(finishScrolling, 160);
+  }
+
   function tick(now) {
     frame = 0;
-    if (!visible || document.hidden || motionPreference.matches) return;
+    if (!visible || document.hidden || scrolling || motionPreference.matches) return;
     if (lastTick) {
       const dt = Math.min(now - lastTick, 100) / 1000;
       elapsed += dt;
@@ -325,7 +343,8 @@ if (stage && canvas && context) {
       ringOffset.x = 0;
       ringOffset.y = 0;
     }
-    if (visible && !document.hidden && !motionPreference.matches) {
+    if (scrolling || !visible || document.hidden) return;
+    if (!motionPreference.matches) {
       frame = requestAnimationFrame(tick);
     } else {
       draw();
@@ -356,6 +375,8 @@ if (stage && canvas && context) {
   }, { rootMargin: '60px' }).observe(stage);
   stage.addEventListener('pointermove', trackPointer, { passive: true });
   stage.addEventListener('pointerleave', releasePointer);
+  window.addEventListener('wheel', prioritizeScrolling, { passive: true });
+  window.addEventListener('scroll', prioritizeScrolling, { passive: true });
   window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('visibilitychange', resume);

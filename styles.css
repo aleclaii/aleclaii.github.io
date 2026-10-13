@@ -44,7 +44,7 @@ svg { width: 19px; height: 19px; flex-shrink: 0; }
 .text-link { display: inline-flex; align-items: center; gap: 9px; width: fit-content; min-height: 36px; text-decoration: underline; }
 .resume-link { margin-left: 20px; font-size: 14px; }
 .hero { display: grid; grid-template-columns: .9fr 1.35fr; column-gap: 72px; padding-top: 81px; }
-.hero-animation { --flow-ink: #787b78; --flow-red: #b23b3d; position: relative; align-self: start; height: 340px; overflow: hidden; border-bottom: 1px solid var(--line); }
+.hero-animation { --flow-ink: #787b78; --flow-red: #b23b3d; position: relative; align-self: start; height: 340px; overflow: hidden; contain: paint; border-bottom: 1px solid var(--line); }
 .hero-animation-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 .degree { margin-top: 18px; font-size: 13px; color: var(--muted); }
 .hero-intro { max-width: 460px; padding-top: 32px; }
