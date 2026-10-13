@@ -1,11 +1,12 @@
-// Approved hero studies: orbital ribbon and atom trails.
+// Three hero options: original weave, orbital ribbon, and atom trails.
 // Choose once per page entry. Resizing, hovering, and clicking keep that choice.
 const stage = document.getElementById('hero-animation');
 const canvas = stage?.querySelector('canvas');
 const context = canvas?.getContext('2d', { alpha: true });
 
 if (stage && canvas && context) {
-  const animation = Math.random() < 0.5 ? 'orbital' : 'atom';
+  const animations = ['weave', 'orbital', 'atom'];
+  const animation = animations[Math.floor(Math.random() * animations.length)];
   const scene = { ctx: context, seed: Math.random(), width: 0, height: 0 };
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   stage.dataset.animation = animation;
@@ -35,19 +36,18 @@ if (stage && canvas && context) {
   function releasePointer() { pointer.target = 0; }
 
   function easePointer(dt) {
-    const follow = 1 - Math.exp(-dt * 5);
+    const follow = 1 - Math.exp(-dt * (animation === 'atom' ? 16 : 7));
     pointer.x += (pointer.targetX - pointer.x) * follow;
     pointer.y += (pointer.targetY - pointer.y) * follow;
-    pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * 4));
-    // The sphere has a slower response and bounded travel inside its ribbon.
-    const dx = (pointer.x - scene.width * 0.5) * 0.3;
-    const dy = (pointer.y - scene.height * 0.5) * 0.3;
-    const distance = Math.hypot(dx, dy);
-    const limit = Math.min(scene.width, scene.height) * 0.16;
-    const scale = distance > limit ? limit / distance : 1;
-    const gravity = 1 - Math.exp(-dt * 1.8);
-    sphereOffset.x += (dx * scale * pointer.strength - sphereOffset.x) * gravity;
-    sphereOffset.y += (dy * scale * pointer.strength - sphereOffset.y) * gravity;
+    const strengthRate = animation === 'weave' ? (pointer.target ? 4 : 2.5) : (pointer.target ? 8 : 3);
+    pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * strengthRate));
+    // A strong pull toward the cursor, with a slower gravitational response.
+    // The renderer keeps the complete sphere within the canvas.
+    const dx = (pointer.x - scene.width * 0.5) * 0.92;
+    const dy = (pointer.y - scene.height * 0.5) * 0.92;
+    const gravity = 1 - Math.exp(-dt * 2.7);
+    sphereOffset.x += (dx * pointer.strength - sphereOffset.x) * gravity;
+    sphereOffset.y += (dy * pointer.strength - sphereOffset.y) * gravity;
   }
 
   function path(ctx,points,colour,alpha=.5,weight=1.6) {
@@ -58,6 +58,61 @@ if (stage && canvas && context) {
   }
   function sample(fn,count=200) {return Array.from({length:count+1},(_,i)=>fn(i/count));}
   function strands(count,seed,fn) {const red=Math.round((.12+.76*seed)*(count-1));for(let i=0;i<count;i++)if(i!==red)fn(i,false);fn(red,true);}
+  function weave(view, seconds, width, height, ink, red) {
+    const context = view.ctx;
+    const redThread = 0.14 + view.seed * 0.72;
+    const WARP_AMOUNT = 0.42;
+    const WARP_RADIUS = 0.32;
+    if (!width || !height) return;
+    context.clearRect(0, 0, width, height);
+    context.lineCap = 'round';
+
+    const lineCount = width < 420 ? 35 : 43;
+    const redIndex = Math.round(redThread * (lineCount - 1));
+    const centerY = height * (0.5 + 0.018 * Math.sin(seconds * 0.26));
+    const step = Math.max(3, width / 140);
+
+    const s = motionPreference.matches ? 0 : pointer.strength;
+    const warp = s * s * (3 - 2 * s); // smoothstep for a softer onset
+    const radius = Math.max(80, Math.min(width, height) * WARP_RADIUS);
+    const inverseRadius = 1 / (radius * radius);
+
+    // Draw the single red strand last so crossings never obscure it.
+    for (let order = 0; order < lineCount; order += 1) {
+      const index = order === lineCount - 1 ? redIndex : order < redIndex ? order : order + 1;
+      const lane = (index / (lineCount - 1)) * 2 - 1;
+      const highlight = index === redIndex;
+      context.strokeStyle = highlight ? red : ink;
+      context.lineWidth = highlight ? 2 : (width < 420 ? 1.25 : 1.5);
+      context.globalAlpha = highlight ? 0.95 : 0.38 + 0.12 * (1 - Math.abs(lane));
+      context.beginPath();
+
+      for (let x = 0; x <= width + step; x += step) {
+        const u = x / width;
+        const gathering = Math.exp(-Math.pow((u - 0.52) / 0.29, 2));
+        const spread = height * 0.43 * (1 - 0.63 * gathering);
+        const current = Math.sin(u * 10.5 + seconds * 0.48 + lane * 2.4);
+        const crosscurrent = Math.sin(u * 24 - seconds * 0.32 + lane * 7.2);
+        let y = centerY + lane * spread
+          + gathering * (current * height * 0.055 + crosscurrent * height * 0.012)
+          + gathering * Math.sin(u * 5.5 - seconds * 0.22) * height * 0.06 * (1 - lane * lane);
+
+        if (warp > 0.001) {
+          const dx = x - pointer.x;
+          const dy = y - pointer.y;
+          const falloff = Math.exp(-(dx * dx + dy * dy) * inverseRadius);
+          // Push threads away from the cursor, with a faint breathing shimmer.
+          y += warp * falloff * (dy * WARP_AMOUNT + Math.sin(seconds * 1.6 + lane * 3) * 1.5);
+        }
+
+        if (x === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      }
+      context.stroke();
+    }
+    context.globalAlpha = 1;
+  }
+
   function orbital(view,t,w,h,grey,red,paper) {
     const yaw=.38+t*.105,tilt=.83;
     const loops=Array.from({length:29},(_,i)=>{
@@ -79,7 +134,9 @@ if (stage && canvas && context) {
       path(view.ctx,points,highlight?red:grey,highlight?.95:.43,highlight?2.3:1.55);
     });}
     ringHalf(false);
-    const ctx=view.ctx,cx=w*.5-centerX*scale+sphereOffset.x,cy=h*.5-centerY*scale+sphereOffset.y,radius=scale*.46;
+    const ctx=view.ctx,radius=scale*.46;
+    const cx=Math.max(radius+10,Math.min(w-radius-10,w*.5-centerX*scale+sphereOffset.x));
+    const cy=Math.max(radius+10,Math.min(h-radius-10,h*.5-centerY*scale+sphereOffset.y));
     ctx.fillStyle=paper;ctx.beginPath();ctx.arc(cx,cy,radius,0,Math.PI*2);ctx.fill();
     function globe(lat,lon){const x=Math.cos(lat)*Math.sin(lon),y=Math.sin(lat),z=Math.cos(lat)*Math.cos(lon),py=y*Math.cos(.3)-z*Math.sin(.3),pz=y*Math.sin(.3)+z*Math.cos(.3);return pz>=0?[cx+radius*x,cy+radius*py]:null;}
     for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe(i*.24,u*Math.PI*2),160),grey,.30,1.1);
@@ -102,20 +159,23 @@ if (stage && canvas && context) {
       const b=[-Math.sin(azimuth)*Math.cos(inclination),Math.cos(azimuth)*Math.cos(inclination),Math.sin(inclination)];
       const speed=(i%2?-1:1)*(.95+(i%5)*.16),head=t*speed+i*1.83+view.seed*6.28;
       const length=highlight?3.15:2.15+(i%3)*.24;
-      const intercept = 0.75;
-      const anchorTheta = head - length * (1 - intercept);
-      const anchor = project(a[0]*Math.cos(anchorTheta)+b[0]*Math.sin(anchorTheta),a[1]*Math.cos(anchorTheta)+b[1]*Math.sin(anchorTheta),b[2]*Math.sin(anchorTheta));
-      const points=sample(u=>{
-        const theta=head-length*(1-u),c=Math.cos(theta),s=Math.sin(theta);
-        const point = project(a[0]*c+b[0]*s,a[1]*c+b[1]*s,b[2]*s);
-        // Each distinct orbit passes through the cursor at the same sampled
-        // point. A compact smooth bend preserves the rest of its moving path.
-        const bend = Math.pow(Math.max(0, 1 - Math.pow((u - intercept) / 0.32, 2)), 2) * pointer.strength;
-        point[0] += (pointer.x - anchor[0]) * bend;
-        point[1] += (pointer.y - anchor[1]) * bend;
-        point[2] *= 1 - bend;
-        return point;
-      },80);
+      const orbitPoint = theta => project(a[0]*Math.cos(theta)+b[0]*Math.sin(theta),a[1]*Math.cos(theta)+b[1]*Math.sin(theta),b[2]*Math.sin(theta));
+      // Align the whole ellipse through the actual cursor. The independent
+      // orbital planes and racing phases remain intact, instead of pinching
+      // one faint portion of each trail toward a lagging mouse position.
+      let anchorTheta=0,nearest=Infinity;
+      for(let j=0;j<80;j++) {
+        const theta=j/80*Math.PI*2,point=orbitPoint(theta);
+        const distance=Math.hypot(point[0]-pointer.targetX,point[1]-pointer.targetY);
+        if(distance<nearest){nearest=distance;anchorTheta=theta;}
+      }
+      const anchor=orbitPoint(anchorTheta);
+      const shiftX=(pointer.targetX-anchor[0])*pointer.strength,shiftY=(pointer.targetY-anchor[1])*pointer.strength;
+      const shifted=theta=>{const p=orbitPoint(theta);return [p[0]+shiftX,p[1]+shiftY,p[2]];};
+      if(pointer.strength>0.005) {
+        path(view.ctx,sample(u=>shifted(anchorTheta+u*Math.PI*2),160),highlight?red:grey,pointer.strength*(highlight?.42:.32),highlight?1.8:1.4);
+      }
+      const points=sample(u=>shifted(head-length*(1-u)),80);
       for(let j=0;j<points.length-1;j+=8) {
         const end=Math.min(j+8,points.length-1),progress=end/(points.length-1),depth=(points[j][2]+points[end][2])/2;
         segments.push({points:points.slice(j,end+1),depth,highlight,alpha:(highlight?.94:.64)*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:highlight?2.45:1.55+.35*progress});
@@ -128,7 +188,7 @@ if (stage && canvas && context) {
   function draw() {
     if (!scene.width || !scene.height) return;
     context.clearRect(0, 0, scene.width, scene.height);
-    const renderer = animation === 'orbital' ? orbital : atom;
+    const renderer = { weave, orbital, atom }[animation];
     renderer(scene, elapsed, scene.width, scene.height, ink, red, paper);
   }
 
