@@ -1,160 +1,145 @@
-// A quiet woven flow for the hero. The canvas is decorative; all page content
-// remains available without it. It draws a single frame when motion is reduced.
-// Hovering the hero gently parts the threads around the cursor, like a lens.
+// Approved hero studies: orbital ribbon and atom trails.
+// Choose once per page entry. Resizing, hovering, and clicking keep that choice.
 const stage = document.getElementById('hero-animation');
 const canvas = stage?.querySelector('canvas');
 const context = canvas?.getContext('2d', { alpha: true });
 
 if (stage && canvas && context) {
+  const animation = Math.random() < 0.5 ? 'orbital' : 'atom';
+  const scene = { ctx: context, seed: Math.random(), width: 0, height: 0 };
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-  let width = 0;
-  let height = 0;
+  stage.dataset.animation = animation;
   let ink = '#787b78';
   let red = '#b23b3d';
-  const redThread = 0.14 + Math.random() * 0.72;
-  let visible = true;
+  let paper = '#f3f0e9';
+  let elapsed = 1.7;
+  let visible = false;
   let frame = 0;
+  let lastTick = 0;
   let lastPaint = 0;
 
-  // Hover warp. The smoothed position trails the real cursor slightly, and the
-  // strength eases in and out so the effect never switches on abruptly.
-  const WARP_AMOUNT = 0.42; // how strongly threads part (0.3 subtle, 0.6 bold)
-  const WARP_RADIUS = 0.32; // radius as a share of the hero's shorter side
-  const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
-
-  function trackPointer(event) {
-    if (event.pointerType === 'touch') return;
-    const bounds = stage.getBoundingClientRect();
-    const x = event.clientX - bounds.left;
-    const y = event.clientY - bounds.top;
-    const inside = x >= 0 && x <= bounds.width && y >= 0 && y <= bounds.height;
-    if (inside) {
-      // Start the warp where the cursor enters rather than sliding in from afar.
-      if (pointer.strength < 0.01) {
-        pointer.x = x;
-        pointer.y = y;
-      }
-      pointer.targetX = x;
-      pointer.targetY = y;
+  function path(ctx,points,colour,alpha=.5,weight=1.6) {
+    ctx.strokeStyle=colour;ctx.globalAlpha=alpha;ctx.lineWidth=weight;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();
+    let lifted=true;
+    for(const point of points) {if(!point){lifted=true;continue;}if(lifted)ctx.moveTo(point[0],point[1]);else ctx.lineTo(point[0],point[1]);lifted=false;}
+    ctx.stroke();ctx.globalAlpha=1;
+  }
+  function sample(fn,count=200) {return Array.from({length:count+1},(_,i)=>fn(i/count));}
+  function strands(count,seed,fn) {const red=Math.round((.12+.76*seed)*(count-1));for(let i=0;i<count;i++)if(i!==red)fn(i,false);fn(red,true);}
+  function orbital(view,t,w,h,grey,red,paper) {
+    const yaw=.38+t*.105,tilt=.83;
+    const loops=Array.from({length:29},(_,i)=>{
+      const lane=i/28*2-1;
+      return sample(u=>{
+        const theta=u*Math.PI*2;
+        const r=1+lane*.115+.075*Math.sin(theta*4-t*.52+lane*1.4)+.027*Math.sin(theta*7+t*.34+lane*2.3);
+        const x=r*Math.cos(theta),y=r*Math.sin(theta),z=lane*.20*Math.sin(theta*2+t*.17)+.075*Math.sin(theta*3+t*.48+lane*1.8);
+        const ry=y*Math.cos(tilt)-z*Math.sin(tilt),rz=y*Math.sin(tilt)+z*Math.cos(tilt);
+        const rx=x*Math.cos(yaw)+rz*Math.sin(yaw),depth=-x*Math.sin(yaw)+rz*Math.cos(yaw),perspective=1/(1+depth*.14);
+        return [rx*perspective,ry*perspective,depth];
+      },240);
+    });
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    for(const loop of loops)for(const [x,y]of loop){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
+    const scale=Math.min(w*.86/(maxX-minX),h*.82/(maxY-minY)),centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;
+    function ringHalf(front) {strands(29,view.seed,(i,highlight)=>{
+      const points=loops[i].map(([x,y,z])=>(z<0)===front?[w*.5+(x-centerX)*scale,h*.5+(y-centerY)*scale]:null);
+      path(view.ctx,points,highlight?red:grey,highlight?.95:.43,highlight?2.3:1.55);
+    });}
+    ringHalf(false);
+    const ctx=view.ctx,cx=w*.5-centerX*scale,cy=h*.5-centerY*scale,radius=scale*.46;
+    ctx.fillStyle=paper;ctx.beginPath();ctx.arc(cx,cy,radius,0,Math.PI*2);ctx.fill();
+    function globe(lat,lon){const x=Math.cos(lat)*Math.sin(lon),y=Math.sin(lat),z=Math.cos(lat)*Math.cos(lon),py=y*Math.cos(.3)-z*Math.sin(.3),pz=y*Math.sin(.3)+z*Math.cos(.3);return pz>=0?[cx+radius*x,cy+radius*py]:null;}
+    for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe(i*.24,u*Math.PI*2),160),grey,.30,1.1);
+    for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe((u-.5)*Math.PI,i*.26),120),grey,.26,1.1);
+    path(ctx,sample(u=>[cx+radius*Math.cos(u*Math.PI*2),cy+radius*Math.sin(u*Math.PI*2)]),grey,.55,1.3);
+    ringHalf(true);
+  }
+  function atom(view,t,w,h,grey,red) {
+    const radius=Math.min(w*.37,h*.40),count=19,redIndex=Math.floor(view.seed*count),segments=[];
+    const yaw=.3+t*.07,tilt=.32;
+    function project(x,y,z) {
+      const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);
+      const ry=y*Math.cos(tilt)-rz*Math.sin(tilt),depth=y*Math.sin(tilt)+rz*Math.cos(tilt),perspective=1/(1+depth*.12);
+      return [w*.5+rx*radius*perspective,h*.5+ry*radius*perspective,depth];
     }
-    pointer.target = inside ? 1 : 0;
-  }
-
-  function releasePointer() {
-    pointer.target = 0;
-  }
-
-  function easePointer(dt) {
-    const follow = 1 - Math.exp(-dt * 7);
-    pointer.x += (pointer.targetX - pointer.x) * follow;
-    pointer.y += (pointer.targetY - pointer.y) * follow;
-    const rate = pointer.target > pointer.strength ? 4 : 2.5;
-    pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * rate));
-  }
-
-  function draw(seconds) {
-    if (!width || !height) return;
-    context.clearRect(0, 0, width, height);
-    context.lineCap = 'round';
-
-    const lineCount = width < 420 ? 35 : 43;
-    const redIndex = Math.round(redThread * (lineCount - 1));
-    const centerY = height * (0.5 + 0.018 * Math.sin(seconds * 0.26));
-    const step = Math.max(3, width / 140);
-
-    const s = motionPreference.matches ? 0 : pointer.strength;
-    const warp = s * s * (3 - 2 * s); // smoothstep for a softer onset
-    const radius = Math.max(80, Math.min(width, height) * WARP_RADIUS);
-    const inverseRadius = 1 / (radius * radius);
-
-    // Draw the single red strand last so crossings never obscure it.
-    for (let order = 0; order < lineCount; order += 1) {
-      const index = order === lineCount - 1 ? redIndex : order < redIndex ? order : order + 1;
-      const lane = (index / (lineCount - 1)) * 2 - 1;
-      const highlight = index === redIndex;
-      context.strokeStyle = highlight ? red : ink;
-      context.lineWidth = highlight ? 2 : (width < 420 ? 1.25 : 1.5);
-      context.globalAlpha = highlight ? 0.95 : 0.38 + 0.12 * (1 - Math.abs(lane));
-      context.beginPath();
-
-      for (let x = 0; x <= width + step; x += step) {
-        const u = x / width;
-        const gathering = Math.exp(-Math.pow((u - 0.52) / 0.29, 2));
-        const spread = height * 0.43 * (1 - 0.63 * gathering);
-        const current = Math.sin(u * 10.5 + seconds * 0.48 + lane * 2.4);
-        const crosscurrent = Math.sin(u * 24 - seconds * 0.32 + lane * 7.2);
-        let y = centerY + lane * spread
-          + gathering * (current * height * 0.055 + crosscurrent * height * 0.012)
-          + gathering * Math.sin(u * 5.5 - seconds * 0.22) * height * 0.06 * (1 - lane * lane);
-
-        if (warp > 0.001) {
-          const dx = x - pointer.x;
-          const dy = y - pointer.y;
-          const falloff = Math.exp(-(dx * dx + dy * dy) * inverseRadius);
-          // Push threads away from the cursor, with a faint breathing shimmer.
-          y += warp * falloff * (dy * WARP_AMOUNT + Math.sin(seconds * 1.6 + lane * 3) * 1.5);
-        }
-
-        if (x === 0) context.moveTo(x, y);
-        else context.lineTo(x, y);
+    for(let i=0;i<count;i++) {
+      const highlight=i===redIndex;
+      const azimuth=i*2.399963,inclination=.38+(i%7)/6*1.16;
+      const a=[Math.cos(azimuth),Math.sin(azimuth),0];
+      const b=[-Math.sin(azimuth)*Math.cos(inclination),Math.cos(azimuth)*Math.cos(inclination),Math.sin(inclination)];
+      const speed=(i%2?-1:1)*(.95+(i%5)*.16),head=t*speed+i*1.83+view.seed*6.28;
+      const length=highlight?3.15:2.15+(i%3)*.24;
+      const points=sample(u=>{
+        const theta=head-length*(1-u),c=Math.cos(theta),s=Math.sin(theta);
+        return project(a[0]*c+b[0]*s,a[1]*c+b[1]*s,b[2]*s);
+      },80);
+      for(let j=0;j<points.length-1;j+=8) {
+        const end=Math.min(j+8,points.length-1),progress=end/(points.length-1),depth=(points[j][2]+points[end][2])/2;
+        segments.push({points:points.slice(j,end+1),depth,highlight,alpha:(highlight?.94:.64)*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:highlight?2.45:1.55+.35*progress});
       }
-      context.stroke();
     }
-    context.globalAlpha = 1;
+    segments.sort((a,b)=>b.depth-a.depth);
+    for(const segment of segments)path(view.ctx,segment.points,segment.highlight?red:grey,segment.alpha,segment.weight);
+  }
+
+  function draw() {
+    if (!scene.width || !scene.height) return;
+    context.clearRect(0, 0, scene.width, scene.height);
+    const renderer = animation === 'orbital' ? orbital : atom;
+    renderer(scene, elapsed, scene.width, scene.height, ink, red, paper);
   }
 
   function pause() {
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
+    lastTick = 0;
   }
 
-  function tick(time) {
+  function tick(now) {
     frame = 0;
     if (!visible || document.hidden || motionPreference.matches) return;
-    if (time - lastPaint >= 33) {
-      easePointer(Math.min(time - lastPaint, 100) / 1000);
-      draw(time / 1000);
-      lastPaint = time;
+    if (lastTick) elapsed += Math.min(now - lastTick, 100) / 1000;
+    lastTick = now;
+    if (now - lastPaint >= 1000 / 30) {
+      draw();
+      lastPaint = now;
     }
     frame = requestAnimationFrame(tick);
   }
 
   function resume() {
     pause();
-    if (visible && !document.hidden && !motionPreference.matches) frame = requestAnimationFrame(tick);
-    else draw(0);
+    if (visible && !document.hidden && !motionPreference.matches) {
+      frame = requestAnimationFrame(tick);
+    } else {
+      draw();
+    }
   }
 
   function resize() {
     const bounds = stage.getBoundingClientRect();
-    width = bounds.width;
-    height = bounds.height;
+    scene.width = bounds.width;
+    scene.height = bounds.height;
     const density = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.round(width * density);
-    canvas.height = Math.round(height * density);
+    canvas.width = Math.round(scene.width * density);
+    canvas.height = Math.round(scene.height * density);
     context.setTransform(density, 0, 0, density, 0, 0);
     const styles = getComputedStyle(stage);
     ink = styles.getPropertyValue('--flow-ink').trim() || '#787b78';
     red = styles.getPropertyValue('--flow-red').trim() || '#b23b3d';
-    draw(motionPreference.matches ? 0 : performance.now() / 1000);
+    paper = styles.getPropertyValue('--paper').trim() || '#f3f0e9';
+    draw();
   }
 
-  const sizeObserver = new ResizeObserver(resize);
-  sizeObserver.observe(stage);
-  const visibilityObserver = new IntersectionObserver(entries => {
+  new ResizeObserver(resize).observe(stage);
+  new IntersectionObserver(entries => {
     visible = entries[0]?.isIntersecting ?? false;
     resume();
-  }, { rootMargin: '60px' });
-  visibilityObserver.observe(stage);
+  }, { rootMargin: '60px' }).observe(stage);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('visibilitychange', resume);
-
-  // Listen on the window so headline text or buttons layered over the canvas
-  // don't block the hover; the hit test against the hero bounds is done above.
-  window.addEventListener('pointermove', trackPointer, { passive: true });
-  document.documentElement.addEventListener('pointerleave', releasePointer);
-  window.addEventListener('blur', releasePointer);
-
+  window.addEventListener('pagehide', pause);
+  window.addEventListener('pageshow', resume);
   resize();
-  resume();
 }
