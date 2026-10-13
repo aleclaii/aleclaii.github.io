@@ -17,6 +17,38 @@ if (stage && canvas && context) {
   let frame = 0;
   let lastTick = 0;
   let lastPaint = 0;
+  const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
+  const sphereOffset = { x: 0, y: 0 };
+
+  function trackPointer(event) {
+    if (event.pointerType === 'touch' || motionPreference.matches) return;
+    const bounds = stage.getBoundingClientRect();
+    if (pointer.strength < 0.01) {
+      pointer.x = event.clientX - bounds.left;
+      pointer.y = event.clientY - bounds.top;
+    }
+    pointer.targetX = event.clientX - bounds.left;
+    pointer.targetY = event.clientY - bounds.top;
+    pointer.target = 1;
+  }
+
+  function releasePointer() { pointer.target = 0; }
+
+  function easePointer(dt) {
+    const follow = 1 - Math.exp(-dt * 5);
+    pointer.x += (pointer.targetX - pointer.x) * follow;
+    pointer.y += (pointer.targetY - pointer.y) * follow;
+    pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * 4));
+    // The sphere has a slower response and bounded travel inside its ribbon.
+    const dx = (pointer.x - scene.width * 0.5) * 0.3;
+    const dy = (pointer.y - scene.height * 0.5) * 0.3;
+    const distance = Math.hypot(dx, dy);
+    const limit = Math.min(scene.width, scene.height) * 0.16;
+    const scale = distance > limit ? limit / distance : 1;
+    const gravity = 1 - Math.exp(-dt * 1.8);
+    sphereOffset.x += (dx * scale * pointer.strength - sphereOffset.x) * gravity;
+    sphereOffset.y += (dy * scale * pointer.strength - sphereOffset.y) * gravity;
+  }
 
   function path(ctx,points,colour,alpha=.5,weight=1.6) {
     ctx.strokeStyle=colour;ctx.globalAlpha=alpha;ctx.lineWidth=weight;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();
@@ -47,7 +79,7 @@ if (stage && canvas && context) {
       path(view.ctx,points,highlight?red:grey,highlight?.95:.43,highlight?2.3:1.55);
     });}
     ringHalf(false);
-    const ctx=view.ctx,cx=w*.5-centerX*scale,cy=h*.5-centerY*scale,radius=scale*.46;
+    const ctx=view.ctx,cx=w*.5-centerX*scale+sphereOffset.x,cy=h*.5-centerY*scale+sphereOffset.y,radius=scale*.46;
     ctx.fillStyle=paper;ctx.beginPath();ctx.arc(cx,cy,radius,0,Math.PI*2);ctx.fill();
     function globe(lat,lon){const x=Math.cos(lat)*Math.sin(lon),y=Math.sin(lat),z=Math.cos(lat)*Math.cos(lon),py=y*Math.cos(.3)-z*Math.sin(.3),pz=y*Math.sin(.3)+z*Math.cos(.3);return pz>=0?[cx+radius*x,cy+radius*py]:null;}
     for(let i=-5;i<=5;i++)path(ctx,sample(u=>globe(i*.24,u*Math.PI*2),160),grey,.30,1.1);
@@ -65,14 +97,24 @@ if (stage && canvas && context) {
     }
     for(let i=0;i<count;i++) {
       const highlight=i===redIndex;
-      const azimuth=i*2.399963,inclination=.38+(i%7)/6*1.16;
+      const azimuth=i*2.399963+view.seed*6.28,inclination=.38+((i*.618034+view.seed)%1)*1.16;
       const a=[Math.cos(azimuth),Math.sin(azimuth),0];
       const b=[-Math.sin(azimuth)*Math.cos(inclination),Math.cos(azimuth)*Math.cos(inclination),Math.sin(inclination)];
       const speed=(i%2?-1:1)*(.95+(i%5)*.16),head=t*speed+i*1.83+view.seed*6.28;
       const length=highlight?3.15:2.15+(i%3)*.24;
+      const intercept = 0.75;
+      const anchorTheta = head - length * (1 - intercept);
+      const anchor = project(a[0]*Math.cos(anchorTheta)+b[0]*Math.sin(anchorTheta),a[1]*Math.cos(anchorTheta)+b[1]*Math.sin(anchorTheta),b[2]*Math.sin(anchorTheta));
       const points=sample(u=>{
         const theta=head-length*(1-u),c=Math.cos(theta),s=Math.sin(theta);
-        return project(a[0]*c+b[0]*s,a[1]*c+b[1]*s,b[2]*s);
+        const point = project(a[0]*c+b[0]*s,a[1]*c+b[1]*s,b[2]*s);
+        // Each distinct orbit passes through the cursor at the same sampled
+        // point. A compact smooth bend preserves the rest of its moving path.
+        const bend = Math.pow(Math.max(0, 1 - Math.pow((u - intercept) / 0.32, 2)), 2) * pointer.strength;
+        point[0] += (pointer.x - anchor[0]) * bend;
+        point[1] += (pointer.y - anchor[1]) * bend;
+        point[2] *= 1 - bend;
+        return point;
       },80);
       for(let j=0;j<points.length-1;j+=8) {
         const end=Math.min(j+8,points.length-1),progress=end/(points.length-1),depth=(points[j][2]+points[end][2])/2;
@@ -99,7 +141,11 @@ if (stage && canvas && context) {
   function tick(now) {
     frame = 0;
     if (!visible || document.hidden || motionPreference.matches) return;
-    if (lastTick) elapsed += Math.min(now - lastTick, 100) / 1000;
+    if (lastTick) {
+      const dt = Math.min(now - lastTick, 100) / 1000;
+      elapsed += dt;
+      easePointer(dt);
+    }
     lastTick = now;
     if (now - lastPaint >= 1000 / 30) {
       draw();
@@ -110,6 +156,12 @@ if (stage && canvas && context) {
 
   function resume() {
     pause();
+    if (motionPreference.matches) {
+      pointer.target = 0;
+      pointer.strength = 0;
+      sphereOffset.x = 0;
+      sphereOffset.y = 0;
+    }
     if (visible && !document.hidden && !motionPreference.matches) {
       frame = requestAnimationFrame(tick);
     } else {
@@ -137,6 +189,9 @@ if (stage && canvas && context) {
     visible = entries[0]?.isIntersecting ?? false;
     resume();
   }, { rootMargin: '60px' }).observe(stage);
+  stage.addEventListener('pointermove', trackPointer, { passive: true });
+  stage.addEventListener('pointerleave', releasePointer);
+  window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('visibilitychange', resume);
   window.addEventListener('pagehide', pause);
