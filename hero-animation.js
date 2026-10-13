@@ -46,9 +46,9 @@ if (stage && canvas && context) {
     pointer.strength += (pointer.target - pointer.strength) * (1 - Math.exp(-dt * strengthRate));
     // A gentle pull toward the cursor, with a slower gravitational response.
     // The renderer keeps the sphere inside its ribbon and both within the canvas.
-    const dx = (pointer.x - scene.width * 0.5) * 0.35;
-    const dy = (pointer.y - scene.height * 0.5) * 0.35;
-    const gravity = 1 - Math.exp(-dt * 2.7);
+    const dx = (pointer.x - scene.width * 0.5) * 0.15;
+    const dy = (pointer.y - scene.height * 0.5) * 0.15;
+    const gravity = 1 - Math.exp(-dt * 2.3);
     sphereOffset.x += (dx * pointer.strength - sphereOffset.x) * gravity;
     sphereOffset.y += (dy * pointer.strength - sphereOffset.y) * gravity;
     // The ribbon is the sphere's orbit, so it follows a beat behind.
@@ -76,6 +76,7 @@ if (stage && canvas && context) {
 
     const lineCount = width < 420 ? 35 : 43;
     const redIndex = Math.round(redThread * (lineCount - 1));
+    const redIndices = [redIndex, (redIndex + Math.floor(lineCount * 0.43)) % lineCount];
     const centerY = height * (0.5 + 0.018 * Math.sin(seconds * 0.26));
     const step = Math.max(3, width / 140);
 
@@ -84,11 +85,11 @@ if (stage && canvas && context) {
     const radius = Math.max(80, Math.min(width, height) * WARP_RADIUS);
     const inverseRadius = 1 / (radius * radius);
 
-    // Draw the single red strand last so crossings never obscure it.
-    for (let order = 0; order < lineCount; order += 1) {
-      const index = order === lineCount - 1 ? redIndex : order < redIndex ? order : order + 1;
+    // Keep two distinct, separated red strands visible above the grey threads.
+    const order = [...Array(lineCount).keys()].filter(index => !redIndices.includes(index)).concat(redIndices);
+    for (const index of order) {
       const lane = (index / (lineCount - 1)) * 2 - 1;
-      const highlight = index === redIndex;
+      const highlight = redIndices.includes(index);
       context.strokeStyle = highlight ? red : ink;
       context.lineWidth = highlight ? 2 : (width < 420 ? 1.25 : 1.5);
       context.globalAlpha = highlight ? 0.95 : 0.38 + 0.12 * (1 - Math.abs(lane));
@@ -135,31 +136,32 @@ if (stage && canvas && context) {
     });
     let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
     for(const loop of loops)for(const [x,y]of loop){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
-    // While hovered the system contracts slightly, giving it room to travel.
-    const s=pointer.strength,contract=1-.08*s*s*(3-2*s);
-    const scale=Math.min(w*.86/(maxX-minX),h*.82/(maxY-minY))*contract,centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;
+    // Fill the same broad hero field as the weave. Fit each axis independently
+    // so a tilted ring doesn't shrink into the middle of a wide canvas.
+    const scaleX=w*.94/(maxX-minX),scaleY=h*.92/(maxY-minY);
+    const scale=Math.min(scaleX,scaleY),centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;
     const clamp=(value,low,high)=>low>high?(low+high)/2:Math.max(low,Math.min(high,value));
-    const halfW=(maxX-minX)/2*scale,halfH=(maxY-minY)/2*scale;
+    const halfW=(maxX-minX)/2*scaleX,halfH=(maxY-minY)/2*scaleY;
     const ringX=clamp(w*.5+ringOffset.x,halfW+6,w-halfW-6),ringY=clamp(h*.5+ringOffset.y,halfH+6,h-halfH-6);
     function ringHalf(front) {strands(29,view.seed,(i,highlight)=>{
-      const points=loops[i].map(([x,y,z])=>(z<0)===front?[ringX+(x-centerX)*scale,ringY+(y-centerY)*scale]:null);
+      const points=loops[i].map(([x,y,z])=>(z<0)===front?[ringX+(x-centerX)*scaleX,ringY+(y-centerY)*scaleY]:null);
       path(view.ctx,points,highlight?red:grey,highlight?.95:.43,highlight?2.3:1.55);
     });}
     ringHalf(false);
     // The sphere leads toward the cursor but never leaves its ribbon.
-    const radius=scale*.46,leash=scale*.22;
-    const orbitX=ringX-centerX*scale,orbitY=ringY-centerY*scale;
-    let leadX=w*.5-centerX*scale+sphereOffset.x-orbitX,leadY=h*.5-centerY*scale+sphereOffset.y-orbitY;
+    const radius=Math.min(h*.29,w*.2),leash=scale*.22;
+    const orbitX=ringX-centerX*scaleX,orbitY=ringY-centerY*scaleY;
+    let leadX=w*.5-centerX*scaleX+sphereOffset.x-orbitX,leadY=h*.5-centerY*scaleY+sphereOffset.y-orbitY;
     const lead=Math.hypot(leadX,leadY);
     if(lead>leash){leadX*=leash/lead;leadY*=leash/lead;}
     const cx=clamp(orbitX+leadX,radius+6,w-radius-6),cy=clamp(orbitY+leadY,radius+6,h-radius-6);
-    // Racing atom trails replace the wireframe globe. The outer ribbon owns
-    // the single red strand; the central atom uses grey trails only.
-    atomTrails(view,t,cx,cy,radius,grey);
+    // One red strand in the ribbon and one red trail in the central atom.
+    atomTrails(view,t,cx,cy,radius,grey,red);
     ringHalf(true);
   }
-  function atomTrails(view,t,cx,cy,radius,grey) {
+  function atomTrails(view,t,cx,cy,radius,grey,red) {
     const segments=[];
+    const redIndex=Math.floor(view.seed*19);
     const yaw=.3+t*.07,tilt=.32;
     const cosYaw=Math.cos(yaw),sinYaw=Math.sin(yaw),cosTilt=Math.cos(tilt),sinTilt=Math.sin(tilt);
     function project(x,y,z) {
@@ -168,6 +170,7 @@ if (stage && canvas && context) {
       return [cx+rx*radius*perspective,cy+ry*radius*perspective,depth];
     }
     for(let i=0;i<19;i++) {
+      const highlight=i===redIndex;
       const azimuth=i*2.399963+view.seed*6.28,inclination=.38+((i*.618034+view.seed)%1)*1.16;
       const a=[Math.cos(azimuth),Math.sin(azimuth),0];
       const b=[-Math.sin(azimuth)*Math.cos(inclination),Math.cos(azimuth)*Math.cos(inclination),Math.sin(inclination)];
@@ -175,11 +178,11 @@ if (stage && canvas && context) {
       const points=sample(u=>{const theta=head-length*(1-u),c=Math.cos(theta),sn=Math.sin(theta);return project(a[0]*c+b[0]*sn,a[1]*c+b[1]*sn,b[2]*sn);},80);
       for(let j=0;j<points.length-1;j+=8) {
         const end=Math.min(j+8,points.length-1),progress=end/(points.length-1),depth=(points[j][2]+points[end][2])/2;
-        segments.push({points:points.slice(j,end+1),depth,alpha:.7*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:1.1+.25*progress});
+        segments.push({points:points.slice(j,end+1),depth,highlight,alpha:(highlight?.96:.7)*(.12+.88*Math.pow(progress,.7))*(depth>0?.55:1),weight:highlight?1.9:1.1+.25*progress});
       }
     }
     segments.sort((a,b)=>b.depth-a.depth);
-    for(const segment of segments)path(view.ctx,segment.points,grey,segment.alpha,segment.weight);
+    for(const highlight of [false,true]) for(const segment of segments) if(segment.highlight===highlight) path(view.ctx,segment.points,highlight?red:grey,segment.alpha,segment.weight);
   }
 
   function draw() {
