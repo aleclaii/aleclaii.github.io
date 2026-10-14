@@ -23,7 +23,7 @@ if (stage && canvas && context) {
   const sphereOffset = { x: 0, y: 0 };
   const ringOffset = { x: 0, y: 0 };
   const gravityCenter = { x: 0, y: 0 };
-  const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0 }));
+  const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0, vx: 0, vy: 0 }));
   const depthOrder = [...bodies];
 
   function trackPointer(event) {
@@ -295,29 +295,63 @@ if (stage && canvas && context) {
     ctx.globalAlpha = 1;
   }
 
-  function threeBody() {
+  function advanceThreeBody(dt, initialize = false) {
     const w = scene.width, h = scene.height;
-    const radius = Math.min(h * 0.20, w * 0.115);
-    const spanX = w * 0.32, spanY = h * 0.23;
-    const cx = clamp(w * 0.5 + gravityCenter.x, 24, w - 24);
-    const cy = clamp(h * 0.5 + gravityCenter.y, 24, h - 24);
-    // Contract near the edges so the cursor can lead the shared center
-    // without losing any spheres outside the canvas.
-    const fit = Math.min(1, (Math.min(cx, w - cx) - 5) / (spanX + radius * 1.15),
-      (Math.min(cy, h - cy) - 5) / (spanY + radius * 1.15));
-    // A bounded figure-eight choreography inspired by the three-body orbit;
-    // this is deliberately not an unstable numerical gravity simulation.
+    const radius = Math.min(h * 0.23, w * 0.135);
+    const margin = radius * 1.14 + 5, contact = radius * 2.2;
+    const spanX = w * 0.28, spanY = h * 0.18;
+    const cx = clamp(w * 0.5 + gravityCenter.x, margin, w - margin);
+    const cy = clamp(h * 0.5 + gravityCenter.y, margin, h - margin);
+    // Spring-led figure-eight orbits with equal-mass contact impulses.
+    // Small integration steps keep collisions stable at varying frame rates.
     const time = elapsed * 0.38 + scene.seed * Math.PI * 2;
-    for (const body of bodies) {
-      const phase = time + body.index * Math.PI * 2 / 3;
-      const s = Math.sin(phase), c = Math.cos(phase), denominator = 1 + s * s;
-      body.x = cx + spanX * c / denominator * fit;
-      body.y = cy + spanY * 2 * s * c / denominator * fit;
-      body.z = Math.sin(phase + 0.65);
+    const steps = Math.max(1, Math.ceil(dt * 120)), step = dt / steps;
+    for (let n = 0; n < steps; n++) {
+      for (const body of bodies) {
+        const phase = time + body.index * Math.PI * 2 / 3;
+        const s = Math.sin(phase), c = Math.cos(phase), denominator = 1 + s * s;
+        const targetX = clamp(cx + spanX * c / denominator, margin, w - margin);
+        const targetY = clamp(cy + spanY * 2 * s * c / denominator, margin, h - margin);
+        if (initialize) {
+          body.x = targetX; body.y = targetY; body.vx = 0; body.vy = 0;
+        }
+        body.vx += ((targetX - body.x) * 2.5 - body.vx * 1.3) * step;
+        body.vy += ((targetY - body.y) * 2.5 - body.vy * 1.3) * step;
+        body.x += body.vx * step; body.y += body.vy * step;
+        body.z = Math.sin(phase + 0.65);
+      }
+      for (let pass = 0; pass < 8; pass++) {
+        for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
+          const a = bodies[i], b = bodies[j];
+          const dx = b.x - a.x, dy = b.y - a.y, distance = Math.hypot(dx, dy);
+          if (distance >= contact) continue;
+          const nx = distance > 0.001 ? dx / distance : 1;
+          const ny = distance > 0.001 ? dy / distance : 0;
+          const correction = (contact - distance) * 0.5;
+          a.x -= nx * correction; a.y -= ny * correction;
+          b.x += nx * correction; b.y += ny * correction;
+          const approach = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+          if (approach < 0) {
+            const impulse = -approach * 0.725;
+            a.vx -= nx * impulse; a.vy -= ny * impulse;
+            b.vx += nx * impulse; b.vy += ny * impulse;
+          }
+        }
+        for (const body of bodies) {
+          if ((body.x < margin && body.vx < 0) || (body.x > w - margin && body.vx > 0)) body.vx *= -0.45;
+          if ((body.y < margin && body.vy < 0) || (body.y > h - margin && body.vy > 0)) body.vy *= -0.45;
+          body.x = clamp(body.x, margin, w - margin);
+          body.y = clamp(body.y, margin, h - margin);
+        }
+      }
     }
+  }
+
+  function threeBody() {
+    const radius = Math.min(scene.height * 0.23, scene.width * 0.135);
     depthOrder.sort((a, b) => b.z - a.z);
     for (const body of depthOrder) {
-      atomTrails(body.x, body.y, radius * fit * (1 - body.z * 0.08), body.index * 2.7);
+      atomTrails(body.x, body.y, radius, body.index * 2.7);
     }
   }
 
@@ -342,6 +376,7 @@ if (stage && canvas && context) {
       const dt = Math.min(now - lastTick, 100) / 1000;
       elapsed += dt;
       easePointer(dt);
+      if (animation === 'three-body') advanceThreeBody(dt);
     }
     lastTick = now;
     // Paint on each display frame; the old 30 fps gate produced uneven 20 fps.
@@ -361,6 +396,7 @@ if (stage && canvas && context) {
       ringOffset.y = 0;
       gravityCenter.x = 0;
       gravityCenter.y = 0;
+      if (animation === 'three-body') advanceThreeBody(0, true);
     }
     if (!visible || document.hidden) return;
     if (!motionPreference.matches) {
@@ -384,6 +420,7 @@ if (stage && canvas && context) {
     context.lineCap = 'round';
     context.lineJoin = 'round';
     prepareGeometry();
+    if (animation === 'three-body') advanceThreeBody(0, true);
     draw();
   }
 
