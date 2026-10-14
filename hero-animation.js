@@ -25,6 +25,24 @@ if (stage && canvas && context) {
   const gravityCenter = { x: 0, y: 0 };
   const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, squash: 0, nx: 1, ny: 0, nz: 0, contact: 0 }));
   const depthOrder = [...bodies];
+  // A bounded pool lets repeated clicks overlap without adding frame work forever.
+  const ripples = Array.from({ length: 3 }, () => ({ start: -Infinity, distance: null }));
+  let nextRipple = 0;
+
+  function rippleWeave(event) {
+    if (animation !== 'weave' || window.FREEZE_ANIMATIONS || motionPreference.matches || !weaveGeometry) return;
+    const bounds = stage.getBoundingClientRect();
+    const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+    const ripple = ripples[nextRipple];
+    nextRipple = (nextRipple + 1) % ripples.length;
+    ripple.start = elapsed;
+    const g = weaveGeometry;
+    // Calculate distances only on activation, not in the animation loop.
+    for (let i = 0; i < g.lines; i++) for (let j = 0; j < g.points; j++) {
+      const k = i * g.points + j;
+      ripple.distance[k] = Math.hypot(g.x[j] - x, g.base[k] - y);
+    }
+  }
 
   function trackPointer(event) {
     if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
@@ -87,8 +105,12 @@ if (stage && canvas && context) {
         crossSin: new Float32Array(size), crossCos: new Float32Array(size),
         slowSin: new Float32Array(points), slowCos: new Float32Array(points),
         currentAmp: new Float32Array(points), crossAmp: new Float32Array(points),
-        surface: new Float32Array(points), lane: new Float32Array(lines)
+        surface: new Float32Array(points), lane: new Float32Array(lines), ripple: new Float32Array(size)
       };
+      for (const ripple of ripples) {
+        ripple.start = -Infinity;
+        ripple.distance = new Float32Array(size);
+      }
       for (let j = 0; j < points; j++) {
         const x = j * step, u = x / w;
         const gathering = Math.exp(-Math.pow((u - 0.52) / 0.29, 2));
@@ -177,6 +199,19 @@ if (stage && canvas && context) {
     const s = pointer.strength, warp = s * s * (3 - 2 * s);
     const radius = Math.max(80, Math.min(scene.width, scene.height) * 0.32);
     const radiusSquared = radius * radius;
+    g.ripple.fill(0);
+    const speed = scene.width * 0.65, band = scene.height * 0.18;
+    for (const ripple of ripples) {
+      const age = t - ripple.start;
+      if (age < 0 || age > 2.8) continue;
+      const front = age * speed;
+      const amplitude = Math.min(26, scene.height * 0.075) * (1 - Math.exp(-age * 16)) * Math.exp(-age * 1.15);
+      for (let k = 0; k < g.ripple.length; k++) {
+        const offset = ripple.distance[k] - front;
+        if (Math.abs(offset) > band * 2.5) continue;
+        g.ripple[k] += amplitude * Math.exp(-offset * offset / (band * band)) * Math.cos(offset * Math.PI * 2 / (band * 1.6));
+      }
+    }
     for (let j = 0; j < g.points; j++) g.surface[j] = g.slowSin[j] * slowCos - g.slowCos[j] * slowSin;
     for (let order = 0; order < g.lines; order++) {
       const i = g.order[order], lane = g.lane[i], base = i * g.points;
@@ -196,6 +231,7 @@ if (stage && canvas && context) {
           const dx = x - pointer.x, dy = y - pointer.y, distance = dx * dx + dy * dy;
           if (distance < radiusSquared * 8) y += warp * Math.exp(-distance / radiusSquared) * (dy * 0.42 + shimmer);
         }
+        y += g.ripple[k];
         if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
@@ -412,6 +448,7 @@ if (stage && canvas && context) {
     pause();
     if (window.FREEZE_ANIMATIONS) return;
     if (motionPreference.matches) {
+      for (const ripple of ripples) ripple.start = -Infinity;
       pointer.target = 0;
       pointer.strength = 0;
       sphereOffset.x = 0;
@@ -455,6 +492,7 @@ if (stage && canvas && context) {
   }, { rootMargin: '60px' }).observe(stage);
   stage.addEventListener('pointermove', trackPointer, { passive: true });
   stage.addEventListener('pointerleave', releasePointer);
+  stage.addEventListener('click', rippleWeave);
   window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('portfolio:motionchange', resume);
