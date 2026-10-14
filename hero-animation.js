@@ -1,12 +1,12 @@
-// Two hero options: original weave and the combined atom orbital.
+// Three hero options: weave, atom orbital, and a three-body atom dance.
 // Choose once per page entry. Resizing, hovering, and clicking keep that choice.
 const stage = document.getElementById('hero-animation');
 const canvas = stage?.querySelector('canvas');
 const context = canvas?.getContext('2d', { alpha: true });
 
 if (stage && canvas && context) {
-  const animations = ['weave', 'atom-orbital'];
-  // `?hero=weave|atom-orbital` pins one option for previewing.
+  const animations = ['weave', 'atom-orbital', 'three-body'];
+  // `?hero=weave|atom-orbital|three-body` pins one option for previewing.
   const requested = new URLSearchParams(location.search).get('hero');
   const preview = ['orbital', 'atom'].includes(requested) ? 'atom-orbital' : requested;
   const animation = animations.includes(preview) ? preview : animations[Math.floor(Math.random() * animations.length)];
@@ -22,6 +22,9 @@ if (stage && canvas && context) {
   const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
   const sphereOffset = { x: 0, y: 0 };
   const ringOffset = { x: 0, y: 0 };
+  const gravityCenter = { x: 0, y: 0 };
+  const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0 }));
+  const depthOrder = [...bodies];
 
   function trackPointer(event) {
     if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
@@ -54,6 +57,9 @@ if (stage && canvas && context) {
     const drag = 1 - Math.exp(-dt * 1.6);
     ringOffset.x += (sphereOffset.x - ringOffset.x) * drag;
     ringOffset.y += (sphereOffset.y - ringOffset.y) * drag;
+    const attraction = 1 - Math.exp(-dt * 1.2);
+    gravityCenter.x += ((pointer.x - scene.width * 0.5) * pointer.strength - gravityCenter.x) * attraction;
+    gravityCenter.y += ((pointer.y - scene.height * 0.5) * pointer.strength - gravityCenter.y) * attraction;
   }
 
   // Allocate geometry once per resize, never inside the animation loop.
@@ -136,7 +142,7 @@ if (stage && canvas && context) {
     for (let i = 0; i < lines; i++) if (i !== g.redIndex) g.order.push(i);
     g.order.push(g.redIndex);
 
-    const orbits = 19, trailPoints = 81;
+    const orbits = animation === 'three-body' ? 13 : 19, trailPoints = 81;
     const a = atomGeometry = {
       orbits, points: trailPoints, redIndex: Math.floor(scene.seed * orbits),
       ax: new Float32Array(orbits), ay: new Float32Array(orbits),
@@ -254,8 +260,8 @@ if (stage && canvas && context) {
     ringHalf(true, scaleX, scaleY, centerX, centerY, ringX, ringY);
   }
 
-  function atomTrails(cx, cy, radius) {
-    const a = atomGeometry, t = elapsed, ctx = context;
+  function atomTrails(cx, cy, radius, phaseOffset = 0) {
+    const a = atomGeometry, t = elapsed + phaseOffset, ctx = context;
     const yawSin = Math.sin(0.3 + t * 0.07), yawCos = Math.cos(0.3 + t * 0.07), tiltSin = Math.sin(0.32), tiltCos = Math.cos(0.32);
     for (let i = 0; i < a.orbits; i++) {
       const head = t * a.speed[i] + a.phase[i], headSin = Math.sin(head), headCos = Math.cos(head);
@@ -289,10 +295,38 @@ if (stage && canvas && context) {
     ctx.globalAlpha = 1;
   }
 
+  function threeBody() {
+    const w = scene.width, h = scene.height;
+    const radius = Math.min(h * 0.20, w * 0.115);
+    const spanX = w * 0.32, spanY = h * 0.23;
+    const cx = clamp(w * 0.5 + gravityCenter.x, 24, w - 24);
+    const cy = clamp(h * 0.5 + gravityCenter.y, 24, h - 24);
+    // Contract near the edges so the cursor can lead the shared center
+    // without losing any spheres outside the canvas.
+    const fit = Math.min(1, (Math.min(cx, w - cx) - 5) / (spanX + radius * 1.15),
+      (Math.min(cy, h - cy) - 5) / (spanY + radius * 1.15));
+    // A bounded figure-eight choreography inspired by the three-body orbit;
+    // this is deliberately not an unstable numerical gravity simulation.
+    const time = elapsed * 0.38 + scene.seed * Math.PI * 2;
+    for (const body of bodies) {
+      const phase = time + body.index * Math.PI * 2 / 3;
+      const s = Math.sin(phase), c = Math.cos(phase), denominator = 1 + s * s;
+      body.x = cx + spanX * c / denominator * fit;
+      body.y = cy + spanY * 2 * s * c / denominator * fit;
+      body.z = Math.sin(phase + 0.65);
+    }
+    depthOrder.sort((a, b) => b.z - a.z);
+    for (const body of depthOrder) {
+      atomTrails(body.x, body.y, radius * fit * (1 - body.z * 0.08), body.index * 2.7);
+    }
+  }
+
   function draw() {
     if (!scene.width || !scene.height) return;
     context.clearRect(0, 0, scene.width, scene.height);
-    if (animation === 'weave') weave(); else atomOrbital();
+    if (animation === 'weave') weave();
+    else if (animation === 'three-body') threeBody();
+    else atomOrbital();
   }
 
   function pause() {
@@ -325,6 +359,8 @@ if (stage && canvas && context) {
       sphereOffset.y = 0;
       ringOffset.x = 0;
       ringOffset.y = 0;
+      gravityCenter.x = 0;
+      gravityCenter.y = 0;
     }
     if (!visible || document.hidden) return;
     if (!motionPreference.matches) {
