@@ -102,19 +102,19 @@ if (stage && canvas && context) {
   const smooth = value => { const p = Math.max(0, Math.min(1, value)); return p * p * (3 - 2 * p); };
 
   function advanceNova(dt) {
-    let targetSpeed = 1 + nova.charge * 0.2;
+    let targetSpeed = 1 + nova.charge * 0.75;
     const age = elapsed - nova.start;
     if (nova.stage === 'idle') {
       if (elapsed - nova.lastClick > 3) nova.charge = Math.max(0, nova.charge - dt * 0.4);
     } else if (age < 2.8) {
       nova.stage = 'ignition';
       nova.morph = smooth(age / 2.8); nova.heat = nova.morph;
-      targetSpeed = 2.2 + nova.morph * 3.8;
+      targetSpeed = 5.5 + nova.morph * 2.5;
     } else if (age < 4.1) {
       nova.stage = 'collapse';
       nova.morph = 1; nova.heat = 1;
       nova.size = 1 - smooth((age - 2.8) / 1.3) * 0.93;
-      targetSpeed = 6 + smooth((age - 2.8) / 1.3) * 2;
+      targetSpeed = 8 + smooth((age - 2.8) / 1.3) * 2;
     } else if (age < 5.2) {
       nova.stage = 'burst';
       nova.size = 0.07; nova.grey = 0; nova.heat = 0;
@@ -131,7 +131,7 @@ if (stage && canvas && context) {
       nova.size = 1; nova.grey = 1; nova.heat = 0; nova.burst = -1;
       targetSpeed = 1;
     }
-    nova.speed += (targetSpeed - nova.speed) * (1 - Math.exp(-dt * 3));
+    nova.speed += (targetSpeed - nova.speed) * (1 - Math.exp(-dt * 6));
     stage.dataset.nova = nova.stage;
   }
 
@@ -358,7 +358,7 @@ if (stage && canvas && context) {
   }
 
   function atomOrbital() {
-    const g = ringGeometry, t = elapsed, w = scene.width, h = scene.height;
+    const g = ringGeometry, t = atomClock, w = scene.width, h = scene.height;
     const yawSin = Math.sin(0.38 + t * 0.105), yawCos = Math.cos(0.38 + t * 0.105);
     const tiltSin = Math.sin(0.83), tiltCos = Math.cos(0.83);
     const c4 = Math.cos(t * 0.52), s4 = Math.sin(t * 0.52), c7 = Math.cos(t * 0.34), s7 = Math.sin(t * 0.34);
