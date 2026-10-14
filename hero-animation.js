@@ -44,6 +44,28 @@ if (stage && canvas && context) {
     }
   }
 
+  function repelBodies(event) {
+    if (animation !== 'three-body' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
+    const bounds = stage.getBoundingClientRect();
+    const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+    const launch = Math.min(scene.width, scene.height) * 1.25;
+    for (const body of bodies) {
+      const perspective = 1 / (1 + body.z / (scene.height * 1.6));
+      let dx = scene.width * 0.5 + (body.x - scene.width * 0.5) * perspective - x;
+      let dy = scene.height * 0.5 + (body.y - scene.height * 0.5) * perspective - y;
+      let distance = Math.hypot(dx, dy);
+      // A click exactly on a center still launches that sphere.
+      if (distance < 1) {
+        const angle = body.index * Math.PI * 2 / 3 + elapsed;
+        dx = Math.cos(angle); dy = Math.sin(angle); distance = 1;
+      }
+      body.vx += dx / distance * launch;
+      body.vy += dy / distance * launch;
+      const speed = Math.hypot(body.vx, body.vy), limit = launch * 1.5;
+      if (speed > limit) { body.vx *= limit / speed; body.vy *= limit / speed; }
+    }
+  }
+
   function trackPointer(event) {
     if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
     const bounds = stage.getBoundingClientRect();
@@ -300,7 +322,7 @@ if (stage && canvas && context) {
     const a = atomGeometry, t = elapsed + phaseOffset, ctx = context;
     const yawSin = Math.sin(0.3 + t * 0.07), yawCos = Math.cos(0.3 + t * 0.07), tiltSin = Math.sin(0.32), tiltCos = Math.cos(0.32);
     for (let i = 0; i < a.orbits; i++) {
-      const head = t * a.speed[i] + a.phase[i], headSin = Math.sin(head), headCos = Math.cos(head);
+      const head = t * a.speed[i] * 1.5 + a.phase[i], headSin = Math.sin(head), headCos = Math.cos(head);
       for (let j = 0; j < a.points; j++) {
         const k = i * a.points + j;
         const c = headCos * a.cos[k] - headSin * a.sin[k], s = headSin * a.cos[k] + headCos * a.sin[k];
@@ -397,6 +419,16 @@ if (stage && canvas && context) {
         const boundY = shell + 5 / perspective + h * 0.5 * (1 - 1 / perspective);
         body.vx += (Math.max(0, boundX - body.x) - Math.max(0, body.x - w + boundX)) * 22 * step;
         body.vy += (Math.max(0, boundY - body.y) - Math.max(0, body.y - h + boundY)) * 22 * step;
+        // Cushion outward launches at the edges without hard position snaps.
+        const cushion = radius * 0.65;
+        const edgeX = Math.min(body.x - boundX, w - boundX - body.x);
+        const edgeY = Math.min(body.y - boundY, h - boundY - body.y);
+        if (edgeX < cushion && ((body.x < w * 0.5 && body.vx < 0) || (body.x > w * 0.5 && body.vx > 0))) {
+          body.vx *= Math.exp(-step * 14 * clamp(1 - edgeX / cushion, 0, 2));
+        }
+        if (edgeY < cushion && ((body.y < h * 0.5 && body.vy < 0) || (body.y > h * 0.5 && body.vy > 0))) {
+          body.vy *= Math.exp(-step * 14 * clamp(1 - edgeY / cushion, 0, 2));
+        }
         body.x += body.vx * step; body.y += body.vy * step; body.z += body.vz * step;
         body.squash += (body.contact - body.squash) * (1 - Math.exp(-step * 6));
       }
@@ -493,6 +525,7 @@ if (stage && canvas && context) {
   stage.addEventListener('pointermove', trackPointer, { passive: true });
   stage.addEventListener('pointerleave', releasePointer);
   stage.addEventListener('click', rippleWeave);
+  stage.addEventListener('click', repelBodies);
   window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('portfolio:motionchange', resume);
