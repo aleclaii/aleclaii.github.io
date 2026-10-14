@@ -19,6 +19,14 @@ if (stage && canvas && context) {
   let visible = false;
   let frame = 0;
   let lastTick = 0;
+  let atomClock = elapsed;
+  const nova = { charge: 0, lastClick: -Infinity, start: -Infinity, stage: 'idle', speed: 1, morph: 0, size: 1, heat: 0, grey: 1, burst: -1 };
+  const burstDirections = new Float32Array(96);
+  for (let i = 0; i < 48; i++) {
+    const angle = i / 48 * Math.PI * 2;
+    burstDirections[i * 2] = Math.cos(angle);
+    burstDirections[i * 2 + 1] = Math.sin(angle);
+  }
   const pointer = { x: 0, y: 0, targetX: 0, targetY: 0, strength: 0, target: 0 };
   const sphereOffset = { x: 0, y: 0 };
   const ringOffset = { x: 0, y: 0 };
@@ -67,7 +75,7 @@ if (stage && canvas && context) {
   }
 
   function trackPointer(event) {
-    if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
+    if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches || nova.stage !== 'idle') return;
     const bounds = stage.getBoundingClientRect();
     if (pointer.strength < 0.01) {
       pointer.x = event.clientX - bounds.left;
@@ -79,6 +87,59 @@ if (stage && canvas && context) {
   }
 
   function releasePointer() { pointer.target = 0; }
+
+  function chargeOrbital() {
+    if (animation !== 'atom-orbital' || window.FREEZE_ANIMATIONS || motionPreference.matches || nova.stage !== 'idle') return;
+    nova.charge = Math.min(6, nova.charge + 1);
+    nova.lastClick = elapsed;
+    if (nova.charge >= 6) {
+      nova.start = elapsed;
+      nova.stage = 'ignition';
+      releasePointer();
+    }
+  }
+
+  const smooth = value => { const p = Math.max(0, Math.min(1, value)); return p * p * (3 - 2 * p); };
+
+  function advanceNova(dt) {
+    let targetSpeed = 1 + nova.charge * 0.2;
+    const age = elapsed - nova.start;
+    if (nova.stage === 'idle') {
+      if (elapsed - nova.lastClick > 3) nova.charge = Math.max(0, nova.charge - dt * 0.4);
+    } else if (age < 2.8) {
+      nova.stage = 'ignition';
+      nova.morph = smooth(age / 2.8); nova.heat = nova.morph;
+      targetSpeed = 2.2 + nova.morph * 3.8;
+    } else if (age < 4.1) {
+      nova.stage = 'collapse';
+      nova.morph = 1; nova.heat = 1;
+      nova.size = 1 - smooth((age - 2.8) / 1.3) * 0.93;
+      targetSpeed = 6 + smooth((age - 2.8) / 1.3) * 2;
+    } else if (age < 5.2) {
+      nova.stage = 'burst';
+      nova.size = 0.07; nova.grey = 0; nova.heat = 0;
+      nova.burst = (age - 4.1) / 1.1; targetSpeed = 3;
+    } else if (age < 9) {
+      nova.stage = 'recovery';
+      const p = (age - 5.2) / 3.8;
+      nova.burst = -1; nova.heat = 0;
+      nova.size = 0.07 + 0.93 * smooth(p / 0.5);
+      nova.morph = 1 - smooth(p); nova.grey = smooth(p);
+      targetSpeed = 1 + (1 - smooth(p)) * 2;
+    } else {
+      nova.stage = 'idle'; nova.charge = 0; nova.morph = 0;
+      nova.size = 1; nova.grey = 1; nova.heat = 0; nova.burst = -1;
+      targetSpeed = 1;
+    }
+    nova.speed += (targetSpeed - nova.speed) * (1 - Math.exp(-dt * 3));
+    stage.dataset.nova = nova.stage;
+  }
+
+  function heatedInk() {
+    if (!nova.heat) return ink;
+    const a = parseInt(ink.slice(1), 16), b = parseInt(red.slice(1), 16), p = nova.heat;
+    return `rgb(${Math.round((a >> 16) * (1 - p) + (b >> 16) * p)},${Math.round(((a >> 8) & 255) * (1 - p) + ((b >> 8) & 255) * p)},${Math.round((a & 255) * (1 - p) + (b & 255) * p)})`;
+  }
 
   function easePointer(dt) {
     const follow = 1 - Math.exp(-dt * 7);
@@ -261,19 +322,33 @@ if (stage && canvas && context) {
     ctx.globalAlpha = 1;
   }
 
-  function ringHalf(front, scaleX, scaleY, centerX, centerY, ringX, ringY) {
+  function ringHalf(front, scaleX, scaleY, centerX, centerY, ringX, ringY, cx, cy, radius) {
     const g = ringGeometry, ctx = context;
+    const greyInk = heatedInk();
     for (let order = 0; order < g.lines; order++) {
       const i = g.order[order], base = i * g.points, highlight = i === g.redIndex;
-      ctx.strokeStyle = highlight ? red : ink;
-      ctx.globalAlpha = highlight ? 0.95 : 0.43;
+      ctx.strokeStyle = highlight ? red : greyInk;
+      ctx.globalAlpha = highlight ? 0.95 : (0.43 + nova.heat * 0.2) * nova.grey;
       ctx.lineWidth = highlight ? 2.3 : 1.55;
+      const orbit = i % atomGeometry.orbits;
+      const phase = atomClock * atomGeometry.speed[orbit] * 1.5 + i * 0.37;
+      const c = Math.cos(phase), s = Math.sin(phase);
       ctx.beginPath();
       let lifted = true;
       for (let j = 0; j < g.points; j++) {
+        // As the ribbon becomes atom trails, open each loop into a racing arc.
+        if (j > (g.points - 1) * (1 - nova.morph * 0.58)) { lifted = true; continue; }
         const k = base + j;
-        if ((g.z[k] < 0) !== front) { lifted = true; continue; }
-        const x = ringX + (g.x[k] - centerX) * scaleX, y = ringY + (g.y[k] - centerY) * scaleY;
+        const ac = g.cos[j] * c - g.sin[j] * s, as = g.sin[j] * c + g.cos[j] * s;
+        const z = atomGeometry.bz[orbit] * as;
+        const depth = g.z[k] * (1 - nova.morph) + z * nova.morph;
+        if ((depth < 0) !== front) { lifted = true; continue; }
+        const perspective = 1 / (1 + z * 0.12);
+        const ax = cx + (atomGeometry.ax[orbit] * ac + atomGeometry.bx[orbit] * as) * radius * perspective;
+        const ay = cy + (atomGeometry.ay[orbit] * ac + atomGeometry.by[orbit] * as) * radius * perspective;
+        const rx = ringX + (g.x[k] - centerX) * scaleX, ry = ringY + (g.y[k] - centerY) * scaleY;
+        const x = cx + ((rx * (1 - nova.morph) + ax * nova.morph) - cx) * nova.size;
+        const y = cy + ((ry * (1 - nova.morph) + ay * nova.morph) - cy) * nova.size;
         if (lifted) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         lifted = false;
       }
@@ -306,7 +381,6 @@ if (stage && canvas && context) {
     const halfW = w * 0.47, halfH = h * 0.46;
     const ringX = clamp(w * 0.5 + ringOffset.x, halfW + 6, w - halfW - 6);
     const ringY = clamp(h * 0.5 + ringOffset.y, halfH + 6, h - halfH - 6);
-    ringHalf(false, scaleX, scaleY, centerX, centerY, ringX, ringY);
     const radius = Math.min(h * 0.29, w * 0.2), leash = scale * 0.22;
     const orbitX = ringX - centerX * scaleX, orbitY = ringY - centerY * scaleY;
     let leadX = w * 0.5 - centerX * scaleX + sphereOffset.x - orbitX;
@@ -314,15 +388,42 @@ if (stage && canvas && context) {
     const lead = Math.hypot(leadX, leadY);
     if (lead > leash) { leadX *= leash / lead; leadY *= leash / lead; }
     const cx = clamp(orbitX + leadX, radius + 6, w - radius - 6), cy = clamp(orbitY + leadY, radius + 6, h - radius - 6);
-    atomTrails(cx, cy, radius);
-    ringHalf(true, scaleX, scaleY, centerX, centerY, ringX, ringY);
+    ringHalf(false, scaleX, scaleY, centerX, centerY, ringX, ringY, cx, cy, radius);
+    atomTrails(cx, cy, radius * nova.size);
+    ringHalf(true, scaleX, scaleY, centerX, centerY, ringX, ringY, cx, cy, radius);
+    if (nova.burst >= 0) supernova(cx, cy);
+  }
+
+  function supernova(cx, cy) {
+    const ctx = context, p = nova.burst;
+    const front = 1 - Math.pow(1 - p, 3), tail = Math.max(0, front - 0.3 * (1 - p));
+    ctx.strokeStyle = red;
+    ctx.globalAlpha = (1 - Math.exp(-p * 24)) * Math.pow(1 - p, 1.3);
+    // One expanding red release, without flashing or a full-canvas overlay.
+    for (let i = 0; i < 48; i++) {
+      const dx = burstDirections[i * 2], dy = burstDirections[i * 2 + 1];
+      const reach = 0.72 + (i % 7) * 0.04;
+      ctx.lineWidth = i % 3 === 0 ? 2.1 : 1.1;
+      ctx.beginPath();
+      for (let j = 0; j <= 6; j++) {
+        const r = tail + (front - tail) * j / 6;
+        const bend = Math.sin(r * 5 + i * 0.8) * r * (1 - r) * 18;
+        const x = cx + dx * r * scene.width * 0.56 * reach - dy * bend;
+        const y = cy + dy * r * scene.height * 0.56 * reach + dx * bend;
+        if (!j) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function atomTrails(cx, cy, radius, phaseOffset = 0, shape = null) {
     const a = atomGeometry, t = elapsed + phaseOffset, ctx = context;
+    const orbital = animation === 'atom-orbital', greyInk = orbital ? heatedInk() : ink;
+    const greyOpacity = orbital ? nova.grey : 1;
     const yawSin = Math.sin(0.3 + t * 0.07), yawCos = Math.cos(0.3 + t * 0.07), tiltSin = Math.sin(0.32), tiltCos = Math.cos(0.32);
     for (let i = 0; i < a.orbits; i++) {
-      const head = t * a.speed[i] * 1.5 + a.phase[i], headSin = Math.sin(head), headCos = Math.cos(head);
+      const head = (atomClock + phaseOffset) * a.speed[i] * 1.5 + a.phase[i], headSin = Math.sin(head), headCos = Math.cos(head);
       for (let j = 0; j < a.points; j++) {
         const k = i * a.points + j;
         const c = headCos * a.cos[k] - headSin * a.sin[k], s = headSin * a.cos[k] + headCos * a.sin[k];
@@ -343,9 +444,9 @@ if (stage && canvas && context) {
     // Batch grey segments by opacity and depth instead of 190 separate strokes.
     for (let pass = 0; pass < 3; pass++) for (let band = 0; band < 10; band++) {
       const highlight = pass === 2, start = band * 8, end = start + 8, progress = end / 80;
-      ctx.strokeStyle = highlight ? red : ink;
+      ctx.strokeStyle = highlight ? red : greyInk;
       ctx.lineWidth = highlight ? 1.9 : 1.1 + 0.25 * progress;
-      ctx.globalAlpha = (highlight ? 0.96 : 0.7) * (0.12 + 0.88 * Math.pow(progress, 0.7)) * (pass === 0 ? 0.55 : 1);
+      ctx.globalAlpha = (highlight ? 0.96 : 0.7 * greyOpacity) * (0.12 + 0.88 * Math.pow(progress, 0.7)) * (pass === 0 ? 0.55 : 1);
       ctx.beginPath();
       for (let i = 0; i < a.orbits; i++) {
         if ((i === a.redIndex) !== highlight) continue;
@@ -467,6 +568,8 @@ if (stage && canvas && context) {
     if (lastTick) {
       const dt = Math.min(now - lastTick, 100) / 1000;
       elapsed += dt;
+      if (animation === 'atom-orbital') advanceNova(dt);
+      atomClock += dt * (animation === 'atom-orbital' ? nova.speed : 1);
       easePointer(dt);
       if (animation === 'three-body') advanceThreeBody(dt);
     }
@@ -480,6 +583,8 @@ if (stage && canvas && context) {
     pause();
     if (window.FREEZE_ANIMATIONS) return;
     if (motionPreference.matches) {
+      Object.assign(nova, { charge: 0, start: -Infinity, stage: 'idle', speed: 1, morph: 0, size: 1, heat: 0, grey: 1, burst: -1 });
+      stage.dataset.nova = 'idle';
       for (const ripple of ripples) ripple.start = -Infinity;
       pointer.target = 0;
       pointer.strength = 0;
@@ -526,6 +631,7 @@ if (stage && canvas && context) {
   stage.addEventListener('pointerleave', releasePointer);
   stage.addEventListener('click', rippleWeave);
   stage.addEventListener('click', repelBodies);
+  stage.addEventListener('click', chargeOrbital);
   window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
   document.addEventListener('portfolio:motionchange', resume);
