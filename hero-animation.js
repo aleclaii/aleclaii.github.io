@@ -23,7 +23,7 @@ if (stage && canvas && context) {
   const sphereOffset = { x: 0, y: 0 };
   const ringOffset = { x: 0, y: 0 };
   const gravityCenter = { x: 0, y: 0 };
-  const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0, vx: 0, vy: 0 }));
+  const bodies = Array.from({ length: 3 }, (_, index) => ({ index, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, squash: 0, nx: 1, ny: 0, nz: 0, contact: 0 }));
   const depthOrder = [...bodies];
 
   function trackPointer(event) {
@@ -260,7 +260,7 @@ if (stage && canvas && context) {
     ringHalf(true, scaleX, scaleY, centerX, centerY, ringX, ringY);
   }
 
-  function atomTrails(cx, cy, radius, phaseOffset = 0) {
+  function atomTrails(cx, cy, radius, phaseOffset = 0, shape = null) {
     const a = atomGeometry, t = elapsed + phaseOffset, ctx = context;
     const yawSin = Math.sin(0.3 + t * 0.07), yawCos = Math.cos(0.3 + t * 0.07), tiltSin = Math.sin(0.32), tiltCos = Math.cos(0.32);
     for (let i = 0; i < a.orbits; i++) {
@@ -270,8 +270,16 @@ if (stage && canvas && context) {
         const c = headCos * a.cos[k] - headSin * a.sin[k], s = headSin * a.cos[k] + headCos * a.sin[k];
         const x = a.ax[i] * c + a.bx[i] * s, y = a.ay[i] * c + a.by[i] * s, z = a.bz[i] * s;
         const rx = x * yawCos + z * yawSin, rz = -x * yawSin + z * yawCos;
-        const ry = y * tiltCos - rz * tiltSin, depth = y * tiltSin + rz * tiltCos, perspective = 1 / (1 + depth * 0.12);
-        a.x[k] = cx + rx * radius * perspective; a.y[k] = cy + ry * radius * perspective; a.z[k] = depth;
+        let px = rx, py = y * tiltCos - rz * tiltSin, depth = y * tiltSin + rz * tiltCos;
+        if (shape && shape.squash > 0.001) {
+          const squeeze = 1 - shape.squash, swell = 1 / Math.sqrt(squeeze);
+          const along = px * shape.nx + py * shape.ny + depth * shape.nz;
+          px = px * swell + shape.nx * along * (squeeze - swell);
+          py = py * swell + shape.ny * along * (squeeze - swell);
+          depth = depth * swell + shape.nz * along * (squeeze - swell);
+        }
+        const perspective = 1 / (1 + depth * 0.12);
+        a.x[k] = cx + px * radius * perspective; a.y[k] = cy + py * radius * perspective; a.z[k] = depth;
       }
     }
     // Batch grey segments by opacity and depth instead of 190 separate strokes.
@@ -297,61 +305,77 @@ if (stage && canvas && context) {
 
   function advanceThreeBody(dt, initialize = false) {
     const w = scene.width, h = scene.height;
-    const radius = Math.min(h * 0.23, w * 0.135);
-    const margin = radius * 1.14 + 5, contact = radius * 2.2;
-    const spanX = w * 0.28, spanY = h * 0.18;
+    const radius = Math.min(h * 0.23, w * 0.135), contact = radius * 2.15;
+    const spanX = w * 0.28, spanY = h * 0.22, spanZ = radius * 1.15;
+    const margin = radius * 1.5 + 5;
     const cx = clamp(w * 0.5 + gravityCenter.x, margin, w - margin);
     const cy = clamp(h * 0.5 + gravityCenter.y, margin, h - margin);
-    // Spring-led figure-eight orbits with equal-mass contact impulses.
-    // Small integration steps keep collisions stable at varying frame rates.
     const time = elapsed * 0.38 + scene.seed * Math.PI * 2;
     const steps = Math.max(1, Math.ceil(dt * 120)), step = dt / steps;
+    // A restrained orbital guide keeps this decorative gravity system bounded.
+    // Contacts are compliant spring forces, never position snaps or hard stops.
     for (let n = 0; n < steps; n++) {
       for (const body of bodies) {
         const phase = time + body.index * Math.PI * 2 / 3;
         const s = Math.sin(phase), c = Math.cos(phase), denominator = 1 + s * s;
         const targetX = clamp(cx + spanX * c / denominator, margin, w - margin);
         const targetY = clamp(cy + spanY * 2 * s * c / denominator, margin, h - margin);
+        const targetZ = spanZ * Math.sin(phase + 0.65);
         if (initialize) {
-          body.x = targetX; body.y = targetY; body.vx = 0; body.vy = 0;
+          body.x = targetX; body.y = targetY; body.z = targetZ;
+          body.vx = 0; body.vy = 0; body.vz = 0; body.squash = 0;
         }
-        body.vx += ((targetX - body.x) * 2.5 - body.vx * 1.3) * step;
-        body.vy += ((targetY - body.y) * 2.5 - body.vy * 1.3) * step;
-        body.x += body.vx * step; body.y += body.vy * step;
-        body.z = Math.sin(phase + 0.65);
+        body.contact = 0;
+        body.vx += ((targetX - body.x) * 2.2 - body.vx * 1.1) * step;
+        body.vy += ((targetY - body.y) * 2.2 - body.vy * 1.1) * step;
+        body.vz += ((targetZ - body.z) * 2.2 - body.vz * 1.1) * step;
       }
-      for (let pass = 0; pass < 8; pass++) {
-        for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
-          const a = bodies[i], b = bodies[j];
-          const dx = b.x - a.x, dy = b.y - a.y, distance = Math.hypot(dx, dy);
-          if (distance >= contact) continue;
-          const nx = distance > 0.001 ? dx / distance : 1;
-          const ny = distance > 0.001 ? dy / distance : 0;
-          const correction = (contact - distance) * 0.5;
-          a.x -= nx * correction; a.y -= ny * correction;
-          b.x += nx * correction; b.y += ny * correction;
-          const approach = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-          if (approach < 0) {
-            const impulse = -approach * 0.725;
-            a.vx -= nx * impulse; a.vy -= ny * impulse;
-            b.vx += nx * impulse; b.vy += ny * impulse;
+      for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
+        const a = bodies[i], b = bodies[j];
+        const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+        const distance = Math.max(0.001, Math.hypot(dx, dy, dz));
+        const nx = dx / distance, ny = dy / distance, nz = dz / distance;
+        const softened = distance * distance + radius * radius * 0.64;
+        let force = radius * radius * radius * 1.1 / softened;
+        if (distance < contact) {
+          const overlap = contact - distance;
+          const approach = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny + (b.vz - a.vz) * nz;
+          force -= overlap * 6 + Math.max(0, -approach) * 2.6;
+          const compression = Math.min(0.32, overlap / contact * 1.3);
+          for (let member = 0; member < 2; member++) {
+            const body = member === 0 ? a : b;
+            if (compression > body.contact) {
+              body.contact = compression; body.nx = nx; body.ny = ny; body.nz = nz;
+            }
           }
         }
-        for (const body of bodies) {
-          if ((body.x < margin && body.vx < 0) || (body.x > w - margin && body.vx > 0)) body.vx *= -0.45;
-          if ((body.y < margin && body.vy < 0) || (body.y > h - margin && body.vy > 0)) body.vy *= -0.45;
-          body.x = clamp(body.x, margin, w - margin);
-          body.y = clamp(body.y, margin, h - margin);
-        }
+        const impulse = force * step;
+        a.vx += nx * impulse; a.vy += ny * impulse; a.vz += nz * impulse;
+        b.vx -= nx * impulse; b.vy -= ny * impulse; b.vz -= nz * impulse;
+      }
+      for (const body of bodies) {
+        // Soft edge restoring forces leave room for the trails to bulge.
+        const perspective = 1 / (1 + body.z / (h * 1.6));
+        const shell = radius * 1.2 / Math.sqrt(1 - body.squash);
+        const boundX = shell + 5 / perspective + w * 0.5 * (1 - 1 / perspective);
+        const boundY = shell + 5 / perspective + h * 0.5 * (1 - 1 / perspective);
+        body.vx += (Math.max(0, boundX - body.x) - Math.max(0, body.x - w + boundX)) * 22 * step;
+        body.vy += (Math.max(0, boundY - body.y) - Math.max(0, body.y - h + boundY)) * 22 * step;
+        body.x += body.vx * step; body.y += body.vy * step; body.z += body.vz * step;
+        body.squash += (body.contact - body.squash) * (1 - Math.exp(-step * 6));
       }
     }
   }
 
   function threeBody() {
-    const radius = Math.min(scene.height * 0.23, scene.width * 0.135);
+    const w = scene.width, h = scene.height;
+    const radius = Math.min(h * 0.23, w * 0.135);
     depthOrder.sort((a, b) => b.z - a.z);
     for (const body of depthOrder) {
-      atomTrails(body.x, body.y, radius, body.index * 2.7);
+      const perspective = 1 / (1 + body.z / (h * 1.6));
+      const x = w * 0.5 + (body.x - w * 0.5) * perspective;
+      const y = h * 0.5 + (body.y - h * 0.5) * perspective;
+      atomTrails(x, y, radius * perspective, body.index * 2.7, body);
     }
   }
 
