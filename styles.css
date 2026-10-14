@@ -161,3 +161,13 @@ svg { width: 19px; height: 19px; flex-shrink: 0; }
   .site-footer p { font-size: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* Temporary motion diagnostic: CSS effects and anchor scrolling stop too. */
+html[data-motion-frozen="true"],
+html[data-motion-frozen="true"] *,
+html[data-motion-frozen="true"] *::before,
+html[data-motion-frozen="true"] *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}

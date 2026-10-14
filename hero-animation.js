@@ -26,7 +26,7 @@ if (stage && canvas && context) {
   const ringOffset = { x: 0, y: 0 };
 
   function trackPointer(event) {
-    if (event.pointerType === 'touch' || motionPreference.matches) return;
+    if (event.pointerType === 'touch' || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
     const bounds = stage.getBoundingClientRect();
     if (pointer.strength < 0.01) {
       pointer.x = event.clientX - bounds.left;
@@ -310,6 +310,7 @@ if (stage && canvas && context) {
   }
 
   function prioritizeScrolling() {
+    if (window.FREEZE_ANIMATIONS) return;
     // Keep the already-rendered frame available for compositor scrolling.
     // No geometry or canvas work competes with wheel, touch, or inertia.
     scrolling = true;
@@ -321,7 +322,7 @@ if (stage && canvas && context) {
 
   function tick(now) {
     frame = 0;
-    if (!visible || document.hidden || scrolling || motionPreference.matches) return;
+    if (!visible || document.hidden || scrolling || window.FREEZE_ANIMATIONS || motionPreference.matches) return;
     if (lastTick) {
       const dt = Math.min(now - lastTick, 100) / 1000;
       elapsed += dt;
@@ -335,6 +336,7 @@ if (stage && canvas && context) {
 
   function resume() {
     pause();
+    if (window.FREEZE_ANIMATIONS) return;
     if (motionPreference.matches) {
       pointer.target = 0;
       pointer.strength = 0;
@@ -379,6 +381,12 @@ if (stage && canvas && context) {
   window.addEventListener('scroll', prioritizeScrolling, { passive: true });
   window.addEventListener('blur', releasePointer);
   motionPreference.addEventListener('change', resume);
+  document.addEventListener('portfolio:motionchange', () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = 0;
+    scrolling = false;
+    resume();
+  });
   document.addEventListener('visibilitychange', resume);
   window.addEventListener('pagehide', pause);
   window.addEventListener('pageshow', resume);
