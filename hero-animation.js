@@ -9,7 +9,9 @@ if (stage && canvas && context) {
   // `?hero=weave|atom-orbital|three-body` pins one option for previewing.
   const requested = new URLSearchParams(location.search).get('hero');
   const preview = ['orbital', 'atom'].includes(requested) ? 'atom-orbital' : requested;
-  const animation = animations.includes(preview) ? preview : animations[Math.floor(Math.random() * animations.length)];
+  // Each page entry: 40% atom orbital, 30% weave, 30% three-body.
+  const roll = Math.random();
+  const animation = animations.includes(preview) ? preview : roll < 0.4 ? 'atom-orbital' : roll < 0.7 ? 'weave' : 'three-body';
   const scene = { ctx: context, seed: Math.random(), width: 0, height: 0 };
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   stage.dataset.animation = animation;
